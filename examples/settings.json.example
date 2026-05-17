@@ -1,0 +1,10 @@
+{
+  "channelsEnabled": true,
+
+  "allowedChannelPlugins": [
+    {
+      "marketplace": "<your-marketplace>",
+      "plugin": "teams"
+    }
+  ]
+}

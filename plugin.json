@@ -1,0 +1,6 @@
+{
+  "name": "teams",
+  "description": "Microsoft Teams channel for Claude Code — bidirectional bridge between a Teams bot and a running Claude Code session.",
+  "version": "0.0.1",
+  "keywords": ["teams", "microsoft-teams", "messaging", "channel", "mcp"]
+}

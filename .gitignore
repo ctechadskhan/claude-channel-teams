@@ -1,0 +1,31 @@
+# Dependencies
+node_modules/
+bun.lockb
+
+# Build output
+dist/
+*.tsbuildinfo
+
+# Environment / secrets
+.env
+.env.local
+.env.*.local
+
+# Local state — never check in allowlist or pairing state
+state/
+data/
+inbox/
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*~
+
+# Logs
+*.log
+logs/
+
+# Test artefacts
+coverage/
