@@ -36,6 +36,9 @@ import {
 } from 'botbuilder'
 import type { Config } from '../config.js'
 import type { Allowlist } from '../pairing/allowlist.js'
+import type { PendingStore } from '../pairing/pair.js'
+import type { PermissionRelay } from '../permission/relay.js'
+import { PERMISSION_REPLY_RE } from '../permission/relay.js'
 import type { ConversationRefStore } from './conversationRefs.js'
 
 /**
@@ -53,12 +56,24 @@ export type ChannelEventSink = (event: {
   ts?: string
 }) => void
 
+/** Hook the adapter calls when an unknown sender needs the pairing DM sent. */
+export type PairingDmSender = (
+  conversationReference: Partial<ConversationReference>,
+  text: string,
+) => Promise<void>
+
 export interface AdapterDeps {
   config: Config
   adapter: CloudAdapter
   allowlist: Allowlist
   refs: ConversationRefStore
   onEvent: ChannelEventSink
+  /** Phase 3 — pending pairings store. Optional so existing tests still wire. */
+  pending?: PendingStore
+  /** Phase 3 — permission relay. Optional so existing tests still wire. */
+  permission?: PermissionRelay
+  /** Phase 3 — send a pairing DM through CloudAdapter. Optional for tests. */
+  sendPairingDm?: PairingDmSender
 }
 
 /** Set of AAD IDs we've already logged a "rejected" line for. */
@@ -69,6 +84,13 @@ const rejectedSeen = new Set<string>()
  * CloudAdapter expects. The SDK only reads `body`, `headers`, and `method`.
  * `body` must be the parsed JSON (the SDK throws if it gets a stream).
  */
+class MalformedBodyError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'MalformedBodyError'
+  }
+}
+
 async function toBotRequest(req: Request): Promise<{ body: unknown; headers: Record<string, string>; method: string }> {
   // Lowercase all headers so the SDK finds 'authorization' regardless of how
   // the upstream proxy capitalised it.
@@ -76,15 +98,24 @@ async function toBotRequest(req: Request): Promise<{ body: unknown; headers: Rec
   req.headers.forEach((v, k) => {
     headers[k.toLowerCase()] = v
   })
-  let body: unknown = {}
+  const raw = await req.text()
+  if (raw.length === 0) {
+    throw new MalformedBodyError('empty request body')
+  }
+  let body: unknown
   try {
-    const raw = await req.text()
-    body = raw.length === 0 ? {} : JSON.parse(raw)
+    body = JSON.parse(raw)
   } catch {
-    // Empty / non-JSON body — let CloudAdapter return its own 400. Don't
-    // throw here because the framework's error message is what an operator
-    // would expect to see.
-    body = ''
+    throw new MalformedBodyError('request body is not valid JSON')
+  }
+  if (!body || typeof body !== 'object') {
+    throw new MalformedBodyError('request body must be a JSON object')
+  }
+  // CloudAdapter requires `type` on the activity; without it the framework
+  // throws a stack-trace-style 500. Fail at the door with a 400 so random
+  // scanners don't pollute the audit log.
+  if (typeof (body as { type?: unknown }).type !== 'string') {
+    throw new MalformedBodyError('request body is missing required activity.type')
   }
   return { body, headers, method: req.method }
 }
@@ -186,10 +217,54 @@ export function makeTurnHandler(deps: AdapterDeps): (ctx: TurnContext) => Promis
       return
     }
 
+    const conversationId = a.conversation?.id
+    if (!conversationId) {
+      // Shouldn't happen for a message activity, but defend anyway.
+      process.stderr.write('teams channel: drop — no conversation.id\n')
+      return
+    }
+    const fromName = a.from?.name ?? ''
+
     // Allowlist gate — the single most important application-level check.
-    // A non-allowlisted sender is dropped silently. We log once per ID so
-    // the operator gets a hint without flooding stderr from a spammer.
+    // A non-allowlisted sender enters the pairing path (Phase 3) if a
+    // pending store is wired; otherwise it's dropped silently.
     if (!deps.allowlist.isAllowed(aadObjectId)) {
+      if (deps.pending && deps.sendPairingDm) {
+        const ref = TurnContext.getConversationReference(a)
+        const decision = deps.pending.recordIncoming({
+          aadObjectId,
+          tenantId: tenantId ?? deps.config.tenantId,
+          fromName,
+          conversationId,
+        })
+        if (decision.action === 'suppress') {
+          // Hit the per-sender reply cap or the global pending cap — drop
+          // silently. Log once per AAD ID so the operator sees an attempted
+          // amplification but the line doesn't repeat.
+          if (!rejectedSeen.has(aadObjectId)) {
+            rejectedSeen.add(aadObjectId)
+            process.stderr.write(
+              `teams channel: pairing suppressed for ${aadObjectId} (${decision.reason})\n`,
+            )
+          }
+          return
+        }
+        const lead =
+          decision.action === 'send_reminder' ? 'Still pending' : 'Hi'
+        const text =
+          `${lead} — this bot is gated. Ask the operator to run ` +
+          `/teams:access pair ${decision.entry.code} in their terminal. ` +
+          `Show this code: ${decision.entry.code}.`
+        process.stderr.write(
+          `teams channel: pairing ${decision.action} pair_id=${decision.entry.pair_id} aad=${aadObjectId}\n`,
+        )
+        deps.sendPairingDm(ref, text).catch(err => {
+          process.stderr.write(
+            `teams channel: pairing DM send failed: ${err}\n`,
+          )
+        })
+        return
+      }
       if (!rejectedSeen.has(aadObjectId)) {
         rejectedSeen.add(aadObjectId)
         process.stderr.write(
@@ -199,22 +274,36 @@ export function makeTurnHandler(deps: AdapterDeps): (ctx: TurnContext) => Promis
       return
     }
 
-    const conversationId = a.conversation?.id
-    if (!conversationId) {
-      // Shouldn't happen for a message activity, but defend anyway.
-      process.stderr.write('teams channel: drop — no conversation.id\n')
-      return
-    }
-
     // Capture the conversation reference for the outbound side. We do this
     // before pushing to Claude so a fast reply can always find its way back.
     const ref = TurnContext.getConversationReference(a)
     deps.refs.put(conversationId, ref, aadObjectId)
 
     const text = typeof a.text === 'string' ? a.text : ''
-    const fromName = a.from?.name ?? ''
     const messageId = a.id
     const ts = a.timestamp ? new Date(a.timestamp).toISOString() : undefined
+
+    // Permission-reply intercept — the sender is already allowlisted, so we
+    // trust them with verdicts. Strict regex (see permission/relay.ts) means
+    // a bare "yes" or chatty prefix falls through to the regular channel
+    // event. If the id doesn't match a pending request, treat the text as a
+    // normal message — better than swallowing it silently.
+    if (deps.permission) {
+      const match = PERMISSION_REPLY_RE.exec(text)
+      if (match) {
+        const verdict = match[1]!.toLowerCase().startsWith('y') ? 'allow' : 'deny'
+        const id = match[2]!.toLowerCase()
+        const handled = deps.permission.resolve(id, verdict)
+        if (handled) {
+          process.stderr.write(
+            `teams channel: permission verdict ${verdict} for ${id}\n`,
+          )
+          return
+        }
+        // Fall through — unknown id may be a coincidence (operator typing
+        // about a different request). Forward as chat.
+      }
+    }
 
     deps.onEvent({
       text,
@@ -261,7 +350,26 @@ export function startListener(deps: AdapterDeps): RunningListener {
         if (req.method !== 'POST') {
           return new Response('method not allowed', { status: 405 })
         }
-        const botReq = await toBotRequest(req)
+        // Parse the body first so we can distinguish a malformed payload
+        // from a real downstream error. Random scanners poking the public
+        // endpoint shouldn't produce 500-stack-traces in the audit log.
+        let botReq: { body: unknown; headers: Record<string, string>; method: string }
+        try {
+          botReq = await toBotRequest(req)
+        } catch (err) {
+          if (err instanceof MalformedBodyError) {
+            // Info-level log only — these are noise, not incidents.
+            process.stderr.write(
+              `teams channel: 400 malformed /api/messages — ${err.message}\n`,
+            )
+            return new Response(err.message, {
+              status: 400,
+              headers: { 'content-type': 'text/plain' },
+            })
+          }
+          process.stderr.write(`teams channel: body read failed: ${err}\n`)
+          return new Response('bad request', { status: 400 })
+        }
         const { res, done } = makeResponseSink()
         // Hand the request to CloudAdapter. The SDK validates the JWT, parses
         // the activity, calls our turn handler. If the turn handler throws,

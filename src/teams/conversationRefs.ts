@@ -25,12 +25,20 @@ interface StoredRef {
   ref: Partial<ConversationReference>
   /** AAD Object ID of the sender at the time of capture. Lowercase. */
   aadObjectId: string
+  /** Last time we saw an inbound from this conversation (ms epoch). */
+  lastSeen: number
 }
 
 export interface ConversationRefStore {
   put(conversationId: string, ref: Partial<ConversationReference>, aadObjectId: string): void
   get(conversationId: string): StoredRef | undefined
   size(): number
+  /**
+   * Return the conversation_id of the most-recently-active conversation.
+   * Used by the permission relay to pick the "primary operator" target in v1
+   * (single-operator scope; see docs/security.md).
+   */
+  mostRecentConversationId(): string | undefined
 }
 
 export function createConversationRefStore(): ConversationRefStore {
@@ -40,13 +48,28 @@ export function createConversationRefStore(): ConversationRefStore {
       // We index by conversation.id because that's what Claude will pass
       // back via the reply tool. Lowercase the AAD ID at storage time so
       // the outbound gate's compare is symmetric with the inbound store.
-      store.set(conversationId, { ref, aadObjectId: aadObjectId.toLowerCase() })
+      store.set(conversationId, {
+        ref,
+        aadObjectId: aadObjectId.toLowerCase(),
+        lastSeen: Date.now(),
+      })
     },
     get(conversationId) {
       return store.get(conversationId)
     },
     size() {
       return store.size
+    },
+    mostRecentConversationId(): string | undefined {
+      let bestId: string | undefined
+      let bestTs = -Infinity
+      for (const [id, stored] of store) {
+        if (stored.lastSeen > bestTs) {
+          bestTs = stored.lastSeen
+          bestId = id
+        }
+      }
+      return bestId
     },
   }
 }

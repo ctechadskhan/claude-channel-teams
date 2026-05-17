@@ -4,13 +4,15 @@ Microsoft Teams channel plugin for [Claude Code][cc] — bridge a Teams bot
 into a running Claude Code session, in the same style as the official
 [Telegram][tg], [Discord][dc], and [iMessage][im] channels.
 
-> **Status: Phase 2 — core wire complete.** The plugin boots, authenticates
-> Bot Framework inbound, gates by Entra ID Object ID, and replies via the
-> `reply` tool. The interactive `/teams:access` pairing skill and the
-> `claude/channel/permission` tool-approval relay land in Phase 3. Not yet
-> production-ready. See [`docs/design.md`](docs/design.md).
+> **Status: Phase 3 — pairing skill and permission relay complete.** The
+> plugin boots, authenticates Bot Framework inbound, gates by Entra ID
+> Object ID, replies via the `reply` tool, drives the full pairing flow
+> through the `/teams:access` skill, and relays tool-approval prompts from
+> Claude Code to Teams (text-reply verdicts). The remaining work for v1 is
+> docs polish, conformance audit, and marketplace submission — see
+> [`docs/design.md`](docs/design.md).
 
-## What it does (target behaviour)
+## What it does
 
 Send a 1:1 chat to your Teams bot from any device signed into Teams. The
 message arrives in your Claude Code session wrapped in a `<channel>` tag.
@@ -23,9 +25,12 @@ the same Teams thread.
 - **Outbound**: Claude calls the `reply` tool; the plugin posts back through
   Bot Framework.
 - **Pairing**: an unknown DM triggers a one-time pairing code. The operator
-  approves it from their Claude Code terminal with `/teams:access pair <code>`.
-- **Permission relay**: tool-approval prompts can optionally be answered from
-  Teams (`yes <id>` / `no <id>`).
+  reviews and approves it from their Claude Code terminal with
+  `/teams:access pair <pair_id> <code>` — both halves are required as the
+  prompt-injection defence.
+- **Permission relay**: tool-approval prompts from Claude Code are relayed
+  to the primary allowlisted Teams conversation. The operator replies
+  `yes <id>` or `no <id>` from Teams and the verdict is fed back to Claude.
 
 ## Prerequisites
 
@@ -67,7 +72,8 @@ outbound replies to conversations not in the allowlist.
 ## Project layout
 
 ```
-src/                  # MCP server + Bot Framework wiring
+src/                  # MCP server + Bot Framework wiring + permission relay
+skills/               # /teams:access operator skill
 tests/                # Bun test suite
 docs/                 # Design, security, install, architecture, pairing
 examples/             # settings.json snippet + systemd unit
@@ -78,10 +84,10 @@ scripts/              # Optional helper scripts
 
 ## Contributing
 
-Phase 2 ships the core inbound/outbound wire and the AAD-ObjectID allowlist.
-Phase 3 will add the `/teams:access` pairing skill and the permission-relay
-capability. PRs welcome on bug fixes, docs, threat-model gaps, dependency
-hardening, or pairing-UX proposals.
+Phase 3 ships the pairing skill, MCP-driven allowlist management, and the
+`claude/channel/permission` text-reply relay. PRs welcome on bug fixes,
+docs, threat-model gaps, dependency hardening, group / channel-scope
+support, or Adaptive Card variants of the permission prompt.
 
 ## Licence
 

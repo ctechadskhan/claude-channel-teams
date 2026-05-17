@@ -53,7 +53,9 @@ Teams user
 [reverse proxy]
   │
   ▼ HTTP /api/messages
-[plugin: restify route]
+[plugin: Bun.serve route]
+  │
+  ▼ JSON parse + activity.type sanity check   ──fail──→ 400 (info-log)
   │
   ▼ CloudAdapter.process(req, res, turnHandler)
     │
@@ -64,16 +66,41 @@ Teams user
   │
   ▼ tenantId === TEAMS_BOT_TENANT_ID?    ──no──→ drop, log
   │
-  ▼ gate({ aadObjectId, conversation })
+  ▼ allowlist.isAllowed(aadObjectId)?
     │
-    ├─ drop      ──→ stderr audit line; nothing else
-    ├─ pair      ──→ send "Pairing required: /teams:access pair <code>"
-    └─ deliver   ──→ build channel notification (next box)
-                       │
-                       ▼ permission-reply regex match?
-                       ├─ yes ─→ notifications/claude/channel/permission
-                       └─ no  ─→ notifications/claude/channel
+    ├─ no ──→ pending.recordIncoming()
+    │           ├─ send_initial / send_reminder ──→ sendPairingDm(...)
+    │           └─ suppress                       ──→ stderr line, drop
+    │
+    └─ yes ──→ refs.put(conversationId, ref, aadObjectId)
+                │
+                ▼ PERMISSION_REPLY_RE.exec(text)
+                ├─ match for known id ──→ permission.resolve()
+                │                          → notifications/claude/channel/permission
+                ├─ match for unknown id ──→ fall through to channel event
+                └─ no match              ──→ notifications/claude/channel
 ```
+
+## Message flow — permission relay (server-initiated outbound)
+
+```
+Claude Code
+  │
+  ▼ notifications/claude/channel/permission_request
+[plugin: mcp.setNotificationHandler]
+  │
+  ▼ permission.onRequest({ request_id, tool_name, ... })
+    │
+    ▼ refs.mostRecentConversationId() && allowlist.isAllowed()?
+    ├─ no  ──→ drop, stderr line ("no allowlisted conversation seen")
+    └─ yes ──→ sendDm(conv, formatPromptText(req))
+                │
+                ▼ setTimeout(5min) — clears slot on no-reply
+                ▼ pending.set(request_id, { conv, askedAt, ... })
+```
+
+The reverse direction (operator's `yes <id>` / `no <id>` reply) is the
+"permission-reply intercept" branch in the inbound flow above.
 
 ## Message flow — outbound
 
@@ -85,7 +112,7 @@ Claude
   │
   ▼ assertAllowedConversation(conversation_id)   ──fail──→ return isError: true
   │
-  ▼ restore ConversationReference from access.json (keyed by aadObjectId)
+  ▼ restore ConversationReference from in-memory store (keyed by conversation_id)
   │
   ▼ adapter.continueConversation(ref, async ctx => {
       await ctx.sendActivity({ type: 'message', text, replyToId: reply_to })
@@ -99,12 +126,17 @@ Claude
 ```
 ~/.claude/channels/teams/
 ├── .env                 # credentials (0600)
-├── access.json          # allowlist + pairings (0600)
-├── approved/            # drop dir — set by /teams:access
-│   └── <aadObjectId>    # contents = ConversationReference JSON
-└── inbox/               # attachment downloads (Phase 3)
+├── allowlist.json       # AAD ObjectID allowlist (0600, atomic writes)
+├── pending.json         # in-flight pairing requests (0600, atomic writes)
+└── inbox/               # attachment downloads (Phase 5)
     └── <ts>-<unique>.<ext>
 ```
+
+Note: there is no `approved/` drop directory in this plugin. The Telegram
+plugin uses a file-drop hand-off because the access skill there only
+writes JSON. We expose the pairing flow as MCP tools instead, so the
+skill calls `approve_pair` and the server does the allowlist update +
+confirmation DM in one transaction.
 
 ## File layout (repo)
 
@@ -120,16 +152,23 @@ claude-channel-teams/
 ├── LICENSE                 # MIT
 ├── README.md
 ├── src/
-│   ├── server.ts           # MCP + tool registration
+│   ├── server.ts           # MCP wiring — tools, permission relay, boot
 │   ├── config.ts           # env loader + validator
 │   ├── types.ts            # shared types
 │   ├── teams/
-│   │   ├── adapter.ts      # HTTP listener + turn handler
+│   │   ├── adapter.ts      # HTTP listener + turn handler + intercepts
 │   │   ├── auth.ts         # CloudAdapter wiring
-│   │   └── reply.ts        # outbound tools
-│   └── pairing/
-│       ├── allowlist.ts    # access.json r/w
-│       └── pair.ts         # gate + code generation + approval polling
+│   │   ├── conversationRefs.ts # in-memory ConversationReference cache
+│   │   └── reply.ts        # `reply` tool, outbound gate
+│   ├── pairing/
+│   │   ├── allowlist.ts    # allowlist.json r/w
+│   │   └── pair.ts         # pending.json r/w, gate decision logic
+│   └── permission/
+│       └── relay.ts        # permission_request → DM, yes/no → verdict
+├── skills/
+│   └── teams/
+│       └── access/
+│           └── SKILL.md    # /teams:access operator skill (Phase 3)
 ├── docs/
 │   ├── installation.md
 │   ├── azure-setup.md
@@ -184,7 +223,7 @@ Useful for first-bring-up. Don't leave a dev tunnel running long-term.
 | --- | --- |
 | Claude Code spawns the plugin | Bun runs `start` script → `bun install` → `bun src/server.ts`. Plugin connects MCP over stdio, binds local listener, prints startup line. |
 | First inbound activity | CloudAdapter validates the JWT, turn handler runs, gate evaluates, notification or drop. |
-| Operator approves pairing | `/teams:access` skill drops a file at `approved/<id>`. Plugin's poll loop picks it up within ~5s, sends confirm, removes file. |
-| Operator runs `/reload-plugins` | Claude Code restarts MCP subprocesses. Plugin re-reads `.env` and `access.json`. |
+| Operator approves pairing | `/teams:access pair <pair_id> <code>` calls `approve_pair` over MCP. Server transfers the entry from `pending.json` to `allowlist.json` and sends the "Paired" confirm via the live ConversationReference, all in one tool call. |
+| Operator runs `/reload-plugins` | Claude Code restarts MCP subprocesses. Plugin re-reads `.env`, `allowlist.json`, and `pending.json`. In-memory ConversationReferences are lost — users may need to send a fresh DM to re-seed. |
 | Operator quits Claude Code | stdio closes. Plugin's shutdown handler fires. Listener unbinds, process exits. |
 | Plugin crash (unhandled error) | `process.on('uncaughtException')` logs, process exits. Claude Code surfaces "MCP server disconnected" — operator restarts. |

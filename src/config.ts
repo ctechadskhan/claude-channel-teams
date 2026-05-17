@@ -28,6 +28,8 @@ export interface Config {
   stateDir: string
   /** Path to `<stateDir>/allowlist.json`. */
   allowlistFile: string
+  /** Path to `<stateDir>/pending.json` — pending pairings (Phase 3). */
+  pendingFile: string
   /** Bot app (client) ID GUID. */
   appId: string
   /** Bot app client secret. */
@@ -134,6 +136,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   return Object.freeze({
     stateDir,
     allowlistFile: join(stateDir, 'allowlist.json'),
+    pendingFile: join(stateDir, 'pending.json'),
     appId,
     appPassword,
     appType: 'SingleTenant' as const,

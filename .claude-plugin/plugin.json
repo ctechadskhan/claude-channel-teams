@@ -1,7 +1,7 @@
 {
   "name": "teams",
   "description": "Microsoft Teams channel for Claude Code — bidirectional bridge between a Teams bot and a running Claude Code session. Manage pairing, allowlist, and policy via /teams:access.",
-  "version": "0.0.1",
+  "version": "0.3.0",
   "keywords": [
     "teams",
     "microsoft-teams",
