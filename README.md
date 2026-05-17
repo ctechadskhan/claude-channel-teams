@@ -4,9 +4,11 @@ Microsoft Teams channel plugin for [Claude Code][cc] — bridge a Teams bot
 into a running Claude Code session, in the same style as the official
 [Telegram][tg], [Discord][dc], and [iMessage][im] channels.
 
-> **Status: Phase 1 — scaffold and design only.** Implementation lands in
-> Phase 2. The skeleton compiles; nothing is wired to Teams yet. See
-> [`docs/design.md`](docs/design.md) for the design currently under review.
+> **Status: Phase 2 — core wire complete.** The plugin boots, authenticates
+> Bot Framework inbound, gates by Entra ID Object ID, and replies via the
+> `reply` tool. The interactive `/teams:access` pairing skill and the
+> `claude/channel/permission` tool-approval relay land in Phase 3. Not yet
+> production-ready. See [`docs/design.md`](docs/design.md).
 
 ## What it does (target behaviour)
 
@@ -65,7 +67,8 @@ outbound replies to conversations not in the allowlist.
 ## Project layout
 
 ```
-src/                  # MCP server + Bot Framework wiring (Phase 1: stubs)
+src/                  # MCP server + Bot Framework wiring
+tests/                # Bun test suite
 docs/                 # Design, security, install, architecture, pairing
 examples/             # settings.json snippet + systemd unit
 scripts/              # Optional helper scripts
@@ -75,9 +78,10 @@ scripts/              # Optional helper scripts
 
 ## Contributing
 
-Phase 1 is research and design; PRs are welcome on `docs/design.md` and
-adjacent material. Implementation contributions wait until the design is
-approved.
+Phase 2 ships the core inbound/outbound wire and the AAD-ObjectID allowlist.
+Phase 3 will add the `/teams:access` pairing skill and the permission-relay
+capability. PRs welcome on bug fixes, docs, threat-model gaps, dependency
+hardening, or pairing-UX proposals.
 
 ## Licence
 
