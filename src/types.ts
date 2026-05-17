@@ -39,7 +39,7 @@ export interface GroupPolicy {
 /**
  * Persistent access state. Lives at <stateDir>/access.json.
  *
- * Mutated only by the /teams:access skill (running in Adnan's terminal session).
+ * Mutated only by the /teams:access skill (running in the operator's terminal session).
  * The server re-reads on every inbound activity so policy changes apply
  * without a restart.
  */

@@ -18,9 +18,9 @@ import { makeTurnHandler } from '../src/teams/adapter'
 import { createAllowlist } from '../src/pairing/allowlist'
 import { createConversationRefStore } from '../src/teams/conversationRefs'
 
-const FIXTURE_ID = 'e829d61c-c3db-4d8d-a155-354e8f6d5be9'
+const FIXTURE_ID = '00000000-0000-4000-8000-000000000001'
 const UNKNOWN_ID = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'
-const TENANT_ID = 'f53c4443-217a-4ae4-bd85-b626e2bee46a'
+const TENANT_ID = '00000000-0000-4000-8000-000000000002'
 
 /** Minimal BotAdapter — TurnContext insists on having one but our turn
  *  handler never sends through it during gate tests. */

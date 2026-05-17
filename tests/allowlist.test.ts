@@ -11,7 +11,7 @@ import { tmpdir } from 'os'
 import { join } from 'path'
 import { createAllowlist } from '../src/pairing/allowlist'
 
-const FIXTURE_ID = 'e829d61c-c3db-4d8d-a155-354e8f6d5be9'
+const FIXTURE_ID = '00000000-0000-4000-8000-000000000001'
 const ANOTHER_ID = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'
 
 describe('allowlist', () => {

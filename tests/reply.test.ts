@@ -20,8 +20,8 @@ import {
   createReplySender,
 } from '../src/teams/reply'
 
-const FIXTURE_ID = 'e829d61c-c3db-4d8d-a155-354e8f6d5be9'
-const TENANT_ID = 'f53c4443-217a-4ae4-bd85-b626e2bee46a'
+const FIXTURE_ID = '00000000-0000-4000-8000-000000000001'
+const TENANT_ID = '00000000-0000-4000-8000-000000000002'
 
 function makeConfig() {
   return {

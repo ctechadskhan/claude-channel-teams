@@ -344,7 +344,7 @@ We point at Microsoft's documentation for these in
 
 ## F. Open questions
 
-The following decisions are unresolved. Adnan to pick before Phase 2 starts.
+The following decisions are unresolved. The operator picks before Phase 2 starts.
 
 ### F.1 — Multi-tenant support in v1?
 
@@ -452,7 +452,7 @@ behaviour is reasonable here.
 - ✅ Reference reading + write-up ([`research-notes.md`](research-notes.md))
 - ✅ Design doc (this file) + threat model
 - ✅ Stubs that compile, no behaviour
-- ☐ Adnan reviews and answers the open questions
+- ☐ Operator reviews and answers the open questions
 
 ### Phase 2 — Core wire
 
@@ -464,7 +464,7 @@ behaviour is reasonable here.
 - `teams/reply.ts` — `reply` tool, outbound gate, ConversationReference
   restore
 - `server.ts` — wire MCP capabilities to tool + notification handlers
-- Manual test against a real Azure Bot resource (Adnan's tenant). Exit:
+- Manual test against a real Azure Bot resource. Exit:
   one full round trip: DM → pair → DM → response → reply lands in Teams.
 
 ### Phase 3 — Hardening + pairing UX polish
