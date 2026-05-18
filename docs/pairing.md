@@ -94,7 +94,7 @@ render but the underlying tools just return JSON.)
 | Operator types `pair <wrong_pair_id> <right_code>`     | Server returns "no pending pair with pair_id…". Re-run `/teams:access` to see the right pair_id.                                        |
 | Operator types `pair <right_pair_id> <wrong_code>`     | Server returns "code does not match pair_id…" — the pending entry is preserved so the operator can retry with the correct value.       |
 | User says "I never got a Paired DM" after approval     | The conversation reference was lost (plugin restart between DM and approval). Ask the user to send a fresh DM — it will pass the gate. |
-| Bot DMs the same user with a different code next week  | Codes don't expire on a clock in Phase 3; pending rows survive across restarts. If the row was removed (by deny, or by hand), a fresh DM starts again. |
+| Bot DMs the same user with a different code next week  | Codes don't expire on a clock; pending rows survive across restarts. If the row was removed (by deny, or by hand), a fresh DM starts again. |
 | Operator runs `revoke <aad_object_id>` — user notices? | No. Revocation is silent by design. Future DMs from that AAD ID are dropped without reply.                                              |
 | User says "I asked the bot to approve me"              | Refuse. Mutation only happens from the operator's terminal. The skill is hardened to ignore those instructions; verify by hand.        |
 
@@ -108,7 +108,7 @@ with `yes <id>` or `no <id>`.
 ## Permission prompts
 
 If the operator's Claude Code session is configured to use the channel
-for tool approvals (it is by default in Phase 3 — the
+for tool approvals (it is by default — the
 `claude/channel/permission` capability is declared), prompts arrive as
 plain text DMs:
 

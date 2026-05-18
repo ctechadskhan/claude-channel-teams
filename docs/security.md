@@ -47,7 +47,7 @@ inbound allowlist. A compromised or prompt-injected Claude **cannot** send
 to an arbitrary tenant user — the outbound side enforces the same gate as
 the inbound side. This mirrors `assertAllowedChat` in the Telegram source.
 
-The same is true for file attachments (Phase 3): the plugin refuses to
+The same is true for file attachments: the plugin refuses to
 send any path inside its state directory except the `inbox/` subtree.
 That keeps `.env`, `allowlist.json`, and `pending.json` from being
 exfiltrated via a `reply --files` call.
@@ -171,7 +171,7 @@ If you don't want any sender to have that authority, comment out the
 still relays chat in both directions; permission prompts stay strictly
 local to the operator's terminal.
 
-### Threat model — permission relay (Phase 3)
+### Threat model — permission relay
 
 | Threat | Mitigation |
 | --- | --- |
@@ -180,7 +180,7 @@ local to the operator's terminal.
 | ID collision between two concurrent prompts | Claude Code mints the ids and we treat them as opaque. In the unlikely event of a collision, the relay rejects the second request via the `clearSlot()` reissue path so the operator only sees one prompt at a time per id. |
 | Verdict for an unknown id (typo, late reply) | The adapter falls through to the regular channel event so the text reaches Claude as chat. Better than silent swallow — the operator gets a chance to notice. |
 | Long-lived pending slot leaking metadata | 5-minute timeout (matches Claude's own approval timeout). Slot is removed on timeout, the operator's typed verdict afterwards falls through. |
-| Multi-operator confusion | v1 sends each prompt to the single most-recently-active allowlisted conversation only. Documented as the "primary operator" limitation — multi-cast lands in Phase 5 alongside Adaptive Cards. |
+| Multi-operator confusion | v1 sends each prompt to the single most-recently-active allowlisted conversation only. Documented as the "primary operator" limitation — multi-cast is a candidate future enhancement alongside Adaptive Cards. |
 
 ### Primary-operator scope limitation (v1)
 
@@ -192,8 +192,9 @@ most-recently-active allowlisted DM. The rationale:
   "no" from another) and a race condition on resolve.
 - The conversation reference for the primary operator is rotated every time
   they DM the bot, so if the operator's device changes the prompt follows.
-- For a multi-operator workflow, Phase 5 (Adaptive Cards) will introduce
-  per-prompt routing — the operator picks the audience at configure time.
+- A future Adaptive Cards revision could introduce per-prompt routing —
+  the operator would pick the audience at configure time. That's not
+  shipped today.
 
 If a second operator needs to answer prompts in your absence today, you
 have two options:
@@ -203,10 +204,10 @@ have two options:
 2. Run a separate `claude-channel-teams` instance with its own bot and
    allowlist.
 
-### Prompt-injection fence — Phase 3 reinforcements
+### Prompt-injection fence
 
-The Phase 2 fence ("never edit the allowlist file") now applies to a
-larger surface. The new operator-only tools — `list_pending`, `approve_pair`,
+The fence's original instruction was simple — "never edit the allowlist
+file". It now applies to a larger surface. The new operator-only tools — `list_pending`, `approve_pair`,
 `deny_pair`, `list_access`, `revoke_access` — are exposed on the MCP
 server, which means any prompt-injected text could in principle ask
 Claude to call them.

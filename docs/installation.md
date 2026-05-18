@@ -75,10 +75,9 @@ For dev work, `cloudflared tunnel run` or `ngrok http 3978` are quicker.
 
 ### 5. Configure the bot credentials
 
-Write the credentials to `~/.claude/channels/teams/.env`. The
-`/teams:configure` skill (Phase 3) automates this; until then, write the
-file by hand using [`.env.example`](../.env.example) as the template, then
-`chmod 600 ~/.claude/channels/teams/.env`.
+Write the credentials to `~/.claude/channels/teams/.env`. Use
+[`.env.example`](../.env.example) as the template, then
+`chmod 600 ~/.claude/channels/teams/.env` so the file is operator-only.
 
 Restart Claude Code so the plugin picks up the new file.
 
