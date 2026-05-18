@@ -9,6 +9,22 @@
 ;
 ; Reverse-proxy / TLS termination is a separate unit — your standard
 ; nginx / caddy service, configured per docs/installation.md.
+;
+; ARCHITECTURE NOTE — why a supervisor script instead of `tmux new-session -d`:
+;
+;   A naive `Type=forking` unit that runs `tmux new-session -d` succeeds
+;   immediately, but systemd has no way to detect when the tmux server
+;   (or the claude inside it) later dies. The unit reports "active
+;   (exited)" while reality is dead, and `Restart=on-failure` never
+;   triggers. This pattern was deployed in production and silently went
+;   down overnight; the operator only discovered when they tried to
+;   attach the next morning.
+;
+;   The fix is a supervisor script (see examples/systemd/supervisor.sh)
+;   that creates the session and then blocks until it disappears. When
+;   claude exits, the tmux session goes, the supervisor exits non-zero,
+;   and systemd's Restart=always brings it back. This is the only
+;   reliable way to detect failure for a tmux-wrapped TUI service.
 
 [Unit]
 Description=Claude Code with Microsoft Teams channel
@@ -21,16 +37,24 @@ User=<service-user>
 Group=<service-group>
 WorkingDirectory=<working-directory>
 
-; Path to the Claude Code binary on this host.
-ExecStart=/usr/local/bin/claude \
-  --channels plugin:teams@<your-marketplace>
+; tmux needs HOME to place its socket under /tmp/tmux-<uid>/default.
+; claude and bun typically live under the service user's home; adjust if
+; they're installed elsewhere on your host.
+Environment=PATH=/home/<service-user>/.npm-global/bin:/home/<service-user>/.bun/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+Environment=HOME=/home/<service-user>
 
-; Until this plugin is on the Anthropic approved list, swap in:
-; ExecStart=/usr/local/bin/claude \
-;   --dangerously-load-development-channels plugin:teams@<your-marketplace>
+; The supervisor (see examples/systemd/supervisor.sh) creates the tmux
+; session running `claude --channels plugin:teams@<your-marketplace>` and
+; blocks until the session dies, then exits — systemd's Restart=always
+; brings it back. Edit the script to match your marketplace name and any
+; additional claude flags.
+ExecStart=/usr/local/bin/claude-channel-teams-supervisor.sh
+ExecStop=/usr/bin/tmux kill-session -t claude-channel-teams
 
-Restart=on-failure
-RestartSec=10
+Restart=always
+RestartSec=5
+TimeoutStartSec=30
+TimeoutStopSec=15
 
 ; Logs go to the journal.
 StandardOutput=journal
@@ -38,10 +62,10 @@ StandardError=journal
 
 ; Light hardening — adjust to your environment.
 NoNewPrivileges=true
-PrivateTmp=true
+PrivateTmp=false
 ProtectSystem=full
 ProtectHome=read-only
-ReadWritePaths=<working-directory> %h/.claude
+ReadWritePaths=<working-directory> %h/.claude /tmp
 
 [Install]
 WantedBy=multi-user.target

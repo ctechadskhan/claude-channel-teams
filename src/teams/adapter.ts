@@ -343,6 +343,12 @@ export function startListener(deps: AdapterDeps): RunningListener {
     hostname: config.bindHost,
     port: config.port,
     development: false,
+    // Fail loudly with EADDRINUSE if another instance is already listening.
+    // Without this, Bun defaults to SO_REUSEPORT and lets multiple processes
+    // share the port — Linux then distributes inbound connections round-robin,
+    // which means a stray plugin invocation in another shell silently steals
+    // half the Teams traffic. Confirmed during the 2026-05-18 cutover.
+    reusePort: false,
     async fetch(req): Promise<Response> {
       const url = new URL(req.url)
       // GET /health — lets the reverse proxy + monitoring poke us without
