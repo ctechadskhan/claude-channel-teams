@@ -191,6 +191,10 @@ function makeResponseSink(): {
 export function makeTurnHandler(deps: AdapterDeps): (ctx: TurnContext) => Promise<void> {
   return async function turn(ctx: TurnContext) {
     const a = ctx.activity
+    // Diagnostic: log every inbound so we know what arrived.
+    process.stderr.write(
+      `teams channel: inbound type=${a.type} from=${a.from?.aadObjectId ?? '<none>'} convId=${a.conversation?.id?.slice(0, 20) ?? '<none>'} text=${JSON.stringify((a.text ?? '').slice(0, 60))}\n`,
+    )
     // We only care about message activities in v1. Conversation update,
     // typing, etc. are ignored — they don't carry a payload Claude needs.
     if (a.type !== 'message') return

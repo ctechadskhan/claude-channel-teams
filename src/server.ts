@@ -70,6 +70,20 @@ try {
   process.exit(1)
 }
 
+// Diagnostic mirror of stderr to a file when TEAMS_PLUGIN_AUDIT_FILE is set
+// (read from the loaded .env). Useful when stderr is hidden inside a TUI
+// host process. NOT for production — leaves no rotation/cap.
+if (process.env.TEAMS_PLUGIN_AUDIT_FILE) {
+  const auditPath = process.env.TEAMS_PLUGIN_AUDIT_FILE
+  const fs = await import('fs')
+  const originalWrite = process.stderr.write.bind(process.stderr)
+  process.stderr.write = ((chunk: any, ...rest: any[]) => {
+    try { fs.appendFileSync(auditPath, typeof chunk === 'string' ? chunk : Buffer.from(chunk)) } catch {}
+    return originalWrite(chunk, ...rest)
+  }) as typeof process.stderr.write
+  process.stderr.write(`teams channel: audit mirror enabled → ${auditPath}\n`)
+}
+
 const allowlist = createAllowlist(config.allowlistFile)
 const pending = createPendingStore(config.pendingFile)
 const adapter = createCloudAdapter(config)
@@ -403,14 +417,16 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
 // ── Inbound → MCP notification sink ─────────────────────────────────────────
 
 const onEvent: ChannelEventSink = event => {
+  process.stderr.write(
+    `teams channel: pushing channel event text=${JSON.stringify(event.text.slice(0, 60))}\n`,
+  )
   // Meta keys must match /[A-Za-z0-9_]+/ — hyphens get silently dropped by
   // Claude Code (research-notes.md). snake_case throughout.
   mcp
     .notification({
       method: 'notifications/claude/channel',
       params: {
-        source: 'teams',
-        text: event.text,
+        content: event.text,
         meta: {
           aad_object_id: event.aadObjectId,
           conversation_id: event.conversationId,
@@ -421,6 +437,7 @@ const onEvent: ChannelEventSink = event => {
         },
       },
     })
+    .then(() => process.stderr.write('teams channel: notify ok\n'))
     .catch(err => {
       // Notifications are fire-and-forget per the channels reference. We log
       // the failure but don't retry — Claude Code drops events silently when
