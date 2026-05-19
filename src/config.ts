@@ -42,6 +42,28 @@ export interface Config {
   bindHost: string
   /** Port for the local HTTP listener. */
   port: number
+  /**
+   * Where downloaded Teams attachments are saved. Configurable via the
+   * `RECEIVED_FILES_DIR` env var. Defaults to
+   * `/home/ccuser/workspace/received-files` — deliberately OUTSIDE the
+   * plugin repo so a `git clean -fdx` can't wipe received work.
+   */
+  receivedFilesDir: string
+  /**
+   * Where outbound files are staged before being downloaded by Teams.
+   * Wiped on plugin start so orphans from a previous boot don't accumulate.
+   * Configurable via `OUTBOX_DIR`. Must be a child of `sendableFilesRoot`.
+   */
+  outboxDir: string
+  /** TTL for outbound download tokens, in seconds. Default 1800 (30 min). */
+  outboxTtlSeconds: number
+  /**
+   * Root directory under which `send_file` is allowed to source files from.
+   * A path argument outside this root is refused — defence against a
+   * prompt-injected Claude being talked into exfiltrating system files.
+   * Configurable via `SENDABLE_FILES_ROOT`. Default `/home/ccuser/workspace/`.
+   */
+  sendableFilesRoot: string
 }
 
 /**
@@ -133,6 +155,22 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     throw new Error(`teams channel: TEAMS_PLUGIN_PORT must be 1..65535 (got ${portStr})`)
   }
 
+  const receivedFilesDir =
+    env.RECEIVED_FILES_DIR?.trim() || '/home/ccuser/workspace/received-files'
+
+  const sendableFilesRoot =
+    env.SENDABLE_FILES_ROOT?.trim() || '/home/ccuser/workspace/'
+  const outboxDir =
+    env.OUTBOX_DIR?.trim() || '/home/ccuser/workspace/outbox'
+
+  const outboxTtlStr = env.OUTBOX_TTL_SECONDS?.trim() || '1800'
+  const outboxTtlSeconds = Number.parseInt(outboxTtlStr, 10)
+  if (!Number.isFinite(outboxTtlSeconds) || outboxTtlSeconds < 1) {
+    throw new Error(
+      `teams channel: OUTBOX_TTL_SECONDS must be a positive integer (got ${outboxTtlStr})`,
+    )
+  }
+
   return Object.freeze({
     stateDir,
     allowlistFile: join(stateDir, 'allowlist.json'),
@@ -143,5 +181,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     tenantId,
     bindHost,
     port,
+    receivedFilesDir,
+    outboxDir,
+    outboxTtlSeconds,
+    sendableFilesRoot,
   })
 }

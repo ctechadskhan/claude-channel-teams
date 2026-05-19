@@ -34,12 +34,26 @@ import {
   type Activity,
   type ConversationReference,
 } from 'botbuilder'
+import type { Attachment } from 'botframework-schema'
 import type { Config } from '../config.js'
 import type { Allowlist } from '../pairing/allowlist.js'
 import type { PendingStore } from '../pairing/pair.js'
 import type { PermissionRelay } from '../permission/relay.js'
 import { PERMISSION_REPLY_RE } from '../permission/relay.js'
 import type { ConversationRefStore } from './conversationRefs.js'
+import type { TypingPump } from './typingPump.js'
+import type { Outbox } from './outbox.js'
+import { handleFilesRequest } from './filesRoute.js'
+
+/**
+ * Optional pluggable attachment handler. The server wires the production
+ * implementation (using `processAttachments` from ./attachments). Tests can
+ * pass a fake to assert composition without touching the filesystem.
+ */
+export type AttachmentHandler = (
+  attachments: Attachment[],
+  fromName: string,
+) => Promise<{ annotations: string[] }>
 
 /**
  * Sink type — what the adapter pushes when an inbound message clears the gate.
@@ -74,6 +88,21 @@ export interface AdapterDeps {
   permission?: PermissionRelay
   /** Phase 3 — send a pairing DM through CloudAdapter. Optional for tests. */
   sendPairingDm?: PairingDmSender
+  /**
+   * Attachment handler. When set, attachments on inbound messages are
+   * downloaded and an annotation per file is appended to the text. Optional
+   * so existing gate tests don't need to wire it; production server always
+   * sets it.
+   */
+  attachments?: AttachmentHandler
+  /** Optional typing-indicator pump. Started after the gate passes so the
+   *  Teams user sees "is typing…" while Claude works. Optional so existing
+   *  tests still wire. */
+  typingPump?: TypingPump
+  /** Outbox for outbound file downloads. When set, the listener serves
+   *  `GET /files/<token>` from this store. Optional so existing tests still
+   *  wire. */
+  outbox?: Outbox
 }
 
 /** Set of AAD IDs we've already logged a "rejected" line for. */
@@ -283,9 +312,37 @@ export function makeTurnHandler(deps: AdapterDeps): (ctx: TurnContext) => Promis
     const ref = TurnContext.getConversationReference(a)
     deps.refs.put(conversationId, ref, aadObjectId)
 
-    const text = typeof a.text === 'string' ? a.text : ''
+    // Start the typing-indicator pump as early as possible — the user sees
+    // "is typing…" while attachments are processed and Claude is notified.
+    // The reply tool stops it when the response lands.
+    deps.typingPump?.start(conversationId, ref)
+
+    const rawText = typeof a.text === 'string' ? a.text : ''
     const messageId = a.id
     const ts = a.timestamp ? new Date(a.timestamp).toISOString() : undefined
+
+    // Attachment handling — runs only for allowlisted senders (we're below
+    // the allowlist gate). Failures degrade to annotation lines so the
+    // message still gets through. We deliberately await here: Hermes needs
+    // file paths in the inbound MCP event, not a follow-up notification.
+    let text = rawText
+    const rawAttachments = Array.isArray(a.attachments) ? (a.attachments as Attachment[]) : []
+    if (deps.attachments && rawAttachments.length > 0) {
+      try {
+        const { annotations } = await deps.attachments(rawAttachments, fromName)
+        if (annotations.length > 0) {
+          text = text.length > 0 ? `${text}\n\n${annotations.join('\n')}` : annotations.join('\n')
+        }
+      } catch (err) {
+        // Defensive: a thrown error inside the handler must not drop the
+        // message. Annotate so Hermes can apologise to the user.
+        process.stderr.write(
+          `teams channel: attachment handler threw: ${err}\n`,
+        )
+        const note = `[Attachment handling failed: ${err instanceof Error ? err.message : String(err)}]`
+        text = text.length > 0 ? `${text}\n\n${note}` : note
+      }
+    }
 
     // Permission-reply intercept — the sender is already allowlisted, so we
     // trust them with verdicts. Strict regex (see permission/relay.ts) means
@@ -293,7 +350,9 @@ export function makeTurnHandler(deps: AdapterDeps): (ctx: TurnContext) => Promis
     // event. If the id doesn't match a pending request, treat the text as a
     // normal message — better than swallowing it silently.
     if (deps.permission) {
-      const match = PERMISSION_REPLY_RE.exec(text)
+      // Match against the raw text — annotations appended for attachments
+      // would otherwise break the anchored regex.
+      const match = PERMISSION_REPLY_RE.exec(rawText)
       if (match) {
         const verdict = match[1]!.toLowerCase().startsWith('y') ? 'allow' : 'deny'
         const id = match[2]!.toLowerCase()
@@ -355,6 +414,14 @@ export function startListener(deps: AdapterDeps): RunningListener {
       // a JWT. No state leak; just "process is alive".
       if (req.method === 'GET' && url.pathname === '/health') {
         return new Response('ok', { status: 200, headers: { 'content-type': 'text/plain' } })
+      }
+      // /files/<token> — outbound file download. No JWT here; the token IS
+      // the secret. See docs/specs/2026-05-19-outbound-file-transfers.md.
+      if (url.pathname.startsWith('/files/')) {
+        if (!deps.outbox) {
+          return new Response('not found', { status: 404 })
+        }
+        return handleFilesRequest(req, deps.outbox)
       }
       if (url.pathname === '/api/messages') {
         if (req.method !== 'POST') {

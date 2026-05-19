@@ -46,9 +46,14 @@ import { createCloudAdapter } from './teams/auth.js'
 import { startListener, type ChannelEventSink } from './teams/adapter.js'
 import { createReplySender } from './teams/reply.js'
 import { createConversationRefStore } from './teams/conversationRefs.js'
+import { createTypingPump } from './teams/typingPump.js'
+import { createOutbox } from './teams/outbox.js'
+import { createFileSender } from './teams/sendFile.js'
 import { createAllowlist } from './pairing/allowlist.js'
 import { codesEqual, createPendingStore } from './pairing/pair.js'
 import { createPermissionRelay } from './permission/relay.js'
+import { ensureBaseDir, processAttachments } from './teams/attachments.js'
+import { MicrosoftAppCredentials } from 'botframework-connector'
 
 // Crash safety — without these the process can die silently on any
 // unhandled rejection / exception. Matches the Telegram plugin.
@@ -89,6 +94,30 @@ const pending = createPendingStore(config.pendingFile)
 const adapter = createCloudAdapter(config)
 const refs = createConversationRefStore()
 
+// Ensure the received-files base directory exists at boot. A permission
+// problem here should fail loud rather than first surface mid-message.
+try {
+  ensureBaseDir(config.receivedFilesDir)
+  process.stderr.write(
+    `teams channel: received files dir ready at ${config.receivedFilesDir}\n`,
+  )
+} catch (err) {
+  process.stderr.write(
+    `teams channel: ${err instanceof Error ? err.message : String(err)}\n`,
+  )
+  process.exit(1)
+}
+
+// Credentials for s2s bearer tokens — used to download inline images from
+// smba.trafficmanager.net. SharePoint file attachments use a short-lived
+// downloadUrl that doesn't need auth. We construct the credentials object
+// here so the token is cached across messages.
+const inlineImageCredentials = new MicrosoftAppCredentials(
+  config.appId,
+  config.appPassword,
+  config.tenantId,
+)
+
 // ── MCP server ──────────────────────────────────────────────────────────────
 
 const mcp = new Server(
@@ -120,9 +149,57 @@ const mcp = new Server(
   },
 )
 
+// ── Typing-indicator pump ───────────────────────────────────────────────────
+// Teams' "is typing…" indicator times out client-side after ~10–15 s. The
+// pump fires an initial indicator as soon as a message clears the gate, then
+// refreshes on a timer until the reply tool stops it (or the safety cap
+// expires — for crashed or never-replying turns).
+const typingPump = createTypingPump({
+  sendTyping: async ref => {
+    await adapter.continueConversationAsync(
+      config.appId,
+      ref,
+      async turnContext => {
+        await turnContext.sendActivity({ type: 'typing' })
+      },
+    )
+  },
+  intervalMs: 8000,
+  maxDurationMs: 5 * 60 * 1000,
+})
+
+// ── Outbox (outbound file downloads) ────────────────────────────────────────
+// Stages files for one-time download via /files/<token>. Wipes itself on
+// boot so orphaned files from a previous run don't accumulate.
+const outbox = createOutbox({
+  dir: config.outboxDir,
+  ttlSeconds: config.outboxTtlSeconds,
+  safetyRoot: config.sendableFilesRoot,
+})
+try {
+  await outbox.initialise()
+  process.stderr.write(
+    `teams channel: outbox ready at ${config.outboxDir} (ttl=${config.outboxTtlSeconds}s)\n`,
+  )
+} catch (err) {
+  process.stderr.write(
+    `teams channel: outbox initialise failed: ${err instanceof Error ? err.message : String(err)}\n`,
+  )
+  process.exit(1)
+}
+
 // ── Outbound reply path (used by both `reply` tool and pairing DM hook) ─────
 
-const replier = createReplySender({ config, adapter, allowlist, refs })
+const replier = createReplySender({ config, adapter, allowlist, refs, typingPump })
+
+const sendFile = createFileSender({
+  config,
+  adapter,
+  allowlist,
+  refs,
+  outbox,
+  downloadBaseUrl: 'https://hermes.vcshosted.uk/files',
+})
 
 /**
  * Send a Bot Framework activity through a stored conversation reference
@@ -207,7 +284,9 @@ mcp.setRequestHandler(ListToolsRequestSchema, async () => ({
       name: 'reply',
       description:
         'Reply on Microsoft Teams. Pass conversation_id from the inbound message. ' +
-        'Plain text only in this phase — Adaptive Cards and attachments come later.',
+        'Text is rendered as markdown — Teams supports bold, italic, headers, ' +
+        'bullet/numbered lists, links, inline code, code blocks, and blockquotes. ' +
+        'Tables and HTML are not reliably supported across Teams clients.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -215,9 +294,48 @@ mcp.setRequestHandler(ListToolsRequestSchema, async () => ({
             type: 'string',
             description: 'The conversation_id from the inbound <channel> tag. Pass through unchanged.',
           },
-          text: { type: 'string', description: 'Message text. Teams renders this as plain text.' },
+          text: { type: 'string', description: 'Message text. Teams renders this as markdown (bold, italic, headers, lists, links, inline code, code blocks, blockquotes).' },
         },
         required: ['conversation_id', 'text'],
+      },
+    },
+    {
+      name: 'send_file',
+      description:
+        'Send a file to the user on Microsoft Teams. Sends an Adaptive Card ' +
+        'with a download link that stays live for the token TTL (default ' +
+        '30 min). Pass either `path` (an absolute path on this host, under ' +
+        'the sendable-files root) OR `content` (base64) + `filename`. ' +
+        '50 MB cap.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          conversation_id: {
+            type: 'string',
+            description: 'The conversation_id from the inbound <channel> tag. Pass through unchanged.',
+          },
+          path: {
+            type: 'string',
+            description: 'Absolute path to a file on this host. Must sit under the configured sendable-files root.',
+          },
+          content: {
+            type: 'string',
+            description: 'Base64-encoded file content. When used, `filename` is also required.',
+          },
+          filename: {
+            type: 'string',
+            description: 'Filename shown to the recipient. Required with `content`; defaults to the basename of `path`.',
+          },
+          mime: {
+            type: 'string',
+            description: 'Optional MIME type. Inferred from filename extension when omitted.',
+          },
+          caption: {
+            type: 'string',
+            description: 'Optional message text shown alongside the card.',
+          },
+        },
+        required: ['conversation_id'],
       },
     },
     // ── Operator-only tools ────────────────────────────────────────────────
@@ -292,6 +410,41 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
         }
         await replier.sendReply(conversationId, text)
         return { content: [{ type: 'text', text: `sent (conv=${conversationId})` }] }
+      }
+
+      case 'send_file': {
+        const conversationId = args.conversation_id
+        if (typeof conversationId !== 'string' || conversationId.length === 0) {
+          throw new Error('send_file requires a non-empty conversation_id string')
+        }
+        const path = typeof args.path === 'string' && args.path.length > 0 ? args.path : undefined
+        const filename = typeof args.filename === 'string' && args.filename.length > 0 ? args.filename : undefined
+        const mime = typeof args.mime === 'string' && args.mime.length > 0 ? args.mime : undefined
+        const caption = typeof args.caption === 'string' && args.caption.length > 0 ? args.caption : undefined
+        let content: Buffer | undefined
+        if (typeof args.content === 'string' && args.content.length > 0) {
+          try {
+            content = Buffer.from(args.content, 'base64')
+          } catch {
+            throw new Error('send_file: `content` must be valid base64')
+          }
+        }
+        const result = await sendFile({
+          conversationId,
+          path,
+          content,
+          filename,
+          mime,
+          caption,
+        })
+        return {
+          content: [
+            {
+              type: 'text',
+              text: `sent file (conv=${conversationId}, filename=${result.filename}, size=${result.sizeBytes}, token=${result.token.slice(0, 8)}…)`,
+            },
+          ],
+        }
       }
 
       case 'list_pending': {
@@ -456,9 +609,16 @@ const listener = startListener({
   onEvent,
   pending,
   permission,
+  typingPump,
+  outbox,
   sendPairingDm: async (ref, text) => {
     await sendActivityRaw(ref, text)
   },
+  attachments: async (atts, fromName) =>
+    processAttachments(atts, fromName, {
+      baseDir: config.receivedFilesDir,
+      getBearerToken: () => inlineImageCredentials.getToken(),
+    }),
 })
 
 await mcp.connect(new StdioServerTransport())
@@ -473,6 +633,8 @@ async function shutdown(): Promise<void> {
   process.stderr.write('teams channel: shutting down\n')
   try {
     permission.clear()
+    typingPump.stopAll()
+    outbox.shutdown()
     await listener.stop()
   } catch (err) {
     process.stderr.write(`teams channel: listener stop error: ${err}\n`)

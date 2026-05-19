@@ -51,7 +51,7 @@ describe('reply tool', () => {
     const refs = createConversationRefStore()
     refs.put('conv-abc', { conversation: { id: 'conv-abc' } } as any, FIXTURE_ID)
 
-    let captured: { appId?: string; refConvId?: string; sentText?: string } = {}
+    let captured: { appId?: string; refConvId?: string; sentText?: string; sentTextFormat?: string } = {}
     const adapter = {
       async continueConversationAsync(appId: string, ref: any, logic: any) {
         captured.appId = appId
@@ -60,6 +60,7 @@ describe('reply tool', () => {
         const fakeCtx = {
           async sendActivity(act: any) {
             captured.sentText = act.text
+            captured.sentTextFormat = act.textFormat
           },
         }
         await logic(fakeCtx)
@@ -77,6 +78,75 @@ describe('reply tool', () => {
     expect(captured.appId).toBe('app-id-from-config')
     expect(captured.refConvId).toBe('conv-abc')
     expect(captured.sentText).toBe('hello from claude')
+    expect(captured.sentTextFormat).toBe('markdown')
+    rmSync(dir, { recursive: true })
+  })
+
+  test('stops the typing pump for the conversation when reply is sent', async () => {
+    const allowlist = createAllowlist(allowlistFile)
+    allowlist.addEntry(FIXTURE_ID)
+    const refs = createConversationRefStore()
+    refs.put('conv-abc', { conversation: { id: 'conv-abc' } } as any, FIXTURE_ID)
+
+    const stopped: string[] = []
+    const typingPump = {
+      start() {},
+      stop(id: string) {
+        stopped.push(id)
+      },
+      stopAll() {},
+    }
+
+    const adapter = {
+      async continueConversationAsync(_appId: string, _ref: any, logic: any) {
+        await logic({ async sendActivity() {} })
+      },
+    } as any
+
+    const { sendReply } = createReplySender({
+      config: makeConfig(),
+      adapter,
+      allowlist,
+      refs,
+      typingPump,
+    })
+
+    await sendReply('conv-abc', 'done thinking')
+    expect(stopped).toEqual(['conv-abc'])
+    rmSync(dir, { recursive: true })
+  })
+
+  test('stops the typing pump even if the adapter send throws', async () => {
+    const allowlist = createAllowlist(allowlistFile)
+    allowlist.addEntry(FIXTURE_ID)
+    const refs = createConversationRefStore()
+    refs.put('conv-abc', { conversation: { id: 'conv-abc' } } as any, FIXTURE_ID)
+
+    const stopped: string[] = []
+    const typingPump = {
+      start() {},
+      stop(id: string) {
+        stopped.push(id)
+      },
+      stopAll() {},
+    }
+
+    const adapter = {
+      async continueConversationAsync() {
+        throw new Error('connector boom')
+      },
+    } as any
+
+    const { sendReply } = createReplySender({
+      config: makeConfig(),
+      adapter,
+      allowlist,
+      refs,
+      typingPump,
+    })
+
+    await expect(sendReply('conv-abc', 'done thinking')).rejects.toThrow('connector boom')
+    expect(stopped).toEqual(['conv-abc'])
     rmSync(dir, { recursive: true })
   })
 

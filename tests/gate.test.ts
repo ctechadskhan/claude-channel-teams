@@ -135,6 +135,67 @@ describe('inbound gate', () => {
     rmSync(dir, { recursive: true })
   })
 
+  test('starts the typing pump when a message clears the gate', async () => {
+    const allowlist = createAllowlist(allowlistFile)
+    allowlist.addEntry(FIXTURE_ID)
+    const refs = createConversationRefStore()
+    const events: any[] = []
+    const started: string[] = []
+    const stopped: string[] = []
+    const typingPump = {
+      start(id: string) {
+        started.push(id)
+      },
+      stop(id: string) {
+        stopped.push(id)
+      },
+      stopAll() {},
+    }
+    const handler = makeTurnHandler({
+      config: makeConfig() as any,
+      adapter: {} as any,
+      allowlist,
+      refs,
+      onEvent: e => events.push(e),
+      typingPump,
+    })
+    const ctx = new TurnContext(new NoopAdapter() as any, makeActivity())
+    await handler(ctx)
+    expect(started).toEqual(['conv-abc'])
+    expect(stopped).toEqual([])
+    rmSync(dir, { recursive: true })
+  })
+
+  test('does not start the typing pump when a message is dropped', async () => {
+    const allowlist = createAllowlist(allowlistFile)
+    allowlist.addEntry(FIXTURE_ID)
+    const refs = createConversationRefStore()
+    const events: any[] = []
+    const started: string[] = []
+    const typingPump = {
+      start(id: string) {
+        started.push(id)
+      },
+      stop() {},
+      stopAll() {},
+    }
+    const handler = makeTurnHandler({
+      config: makeConfig() as any,
+      adapter: {} as any,
+      allowlist,
+      refs,
+      onEvent: e => events.push(e),
+      typingPump,
+    })
+    const activity = makeActivity({
+      from: { id: 'user-2', name: 'Random', aadObjectId: UNKNOWN_ID },
+    })
+    const ctx = new TurnContext(new NoopAdapter() as any, activity)
+    await handler(ctx)
+    expect(started).toEqual([])
+    rmSync(dir, { recursive: true })
+  })
+
   test('ignores non-message activity types', async () => {
     const allowlist = createAllowlist(allowlistFile)
     allowlist.addEntry(FIXTURE_ID)

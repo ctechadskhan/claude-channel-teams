@@ -1,9 +1,11 @@
 /**
  * Outbound reply path — the `reply` tool implementation.
  *
- * Phase 2: plain text replies only. Adaptive Cards, attachments, and the
- * `react` / `edit_message` tools are out of scope (design decisions F.4 /
- * Phase 5).
+ * Phase 2: text replies rendered as markdown (Teams' supported subset:
+ * bold, italic, headers, bullet/numbered lists, links, inline code, code
+ * blocks, blockquotes — tables and HTML are not reliably supported).
+ * Adaptive Cards, attachments, and the `react` / `edit_message` tools are
+ * out of scope (design decisions F.4 / Phase 5).
  *
  * The outbound side mirrors the inbound gate (`assertAllowedConversation`).
  * A compromised or prompt-injected Claude calling `reply` with a
@@ -16,6 +18,7 @@ import { type CloudAdapter, type ConversationReference } from 'botbuilder'
 import type { Allowlist } from '../pairing/allowlist.js'
 import type { Config } from '../config.js'
 import type { ConversationRefStore } from './conversationRefs.js'
+import type { TypingPump } from './typingPump.js'
 
 export class UnknownConversationError extends Error {
   constructor(conversationId: string) {
@@ -43,6 +46,8 @@ export interface ReplyDeps {
   adapter: CloudAdapter
   allowlist: Allowlist
   refs: ConversationRefStore
+  /** Optional typing-indicator pump — stopped when a reply lands. */
+  typingPump?: TypingPump
 }
 
 export function createReplySender(deps: ReplyDeps) {
@@ -71,6 +76,10 @@ export function createReplySender(deps: ReplyDeps) {
 
   async function sendReply(conversationId: string, text: string): Promise<void> {
     const { ref } = assertAllowedConversation(conversationId)
+    // Stop the typing pump first. We do this before the network send so the
+    // indicator clears even if the connector call throws — flapping
+    // "is typing…" forever after a failure is worse than the failure itself.
+    deps.typingPump?.stop(conversationId)
     // `continueConversationAsync` rehydrates the conversation context using
     // the stored reference and our pinned credentials. The SDK takes care of
     // grabbing a fresh service-to-service token (cached by app id).
@@ -78,7 +87,7 @@ export function createReplySender(deps: ReplyDeps) {
       deps.config.appId,
       ref,
       async turnContext => {
-        await turnContext.sendActivity({ type: 'message', text })
+        await turnContext.sendActivity({ type: 'message', text, textFormat: 'markdown' })
       },
     )
     process.stderr.write(
