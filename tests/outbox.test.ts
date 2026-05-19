@@ -110,6 +110,49 @@ describe('outbox', () => {
     expect(existsSync(join(dir, minted.token, 'old.txt'))).toBe(false)
   })
 
+  test('mint strips path components from a malicious filename (basename only)', async () => {
+    const outbox = createOutbox({ dir, ttlSeconds: 60, safetyRoot: tmpdir() })
+    const minted = await outbox.mint({
+      content: Buffer.from('payload'),
+      filename: '../../../etc/shadow-attempt',
+      mime: 'application/octet-stream',
+    })
+    // Token dir must contain the file under its basename, NOT escape.
+    const safePath = join(dir, minted.token, 'shadow-attempt')
+    expect(existsSync(safePath)).toBe(true)
+    // Nothing was written outside the outbox dir.
+    expect(existsSync('/etc/shadow-attempt')).toBe(false)
+    // The returned filename reflects the sanitised value.
+    expect(minted.filename).toBe('shadow-attempt')
+  })
+
+  test('mint rejects an empty filename', async () => {
+    const outbox = createOutbox({ dir, ttlSeconds: 60, safetyRoot: tmpdir() })
+    await expect(
+      outbox.mint({ content: Buffer.from('x'), filename: '', mime: 'text/plain' }),
+    ).rejects.toThrow(/filename/i)
+  })
+
+  test('mint rejects a filename that sanitises to empty (e.g. just slashes)', async () => {
+    const outbox = createOutbox({ dir, ttlSeconds: 60, safetyRoot: tmpdir() })
+    await expect(
+      outbox.mint({ content: Buffer.from('x'), filename: '/', mime: 'text/plain' }),
+    ).rejects.toThrow(/filename/i)
+    await expect(
+      outbox.mint({ content: Buffer.from('x'), filename: '../', mime: 'text/plain' }),
+    ).rejects.toThrow(/filename/i)
+  })
+
+  test('mint rejects dotfile-only filenames like "." or ".."', async () => {
+    const outbox = createOutbox({ dir, ttlSeconds: 60, safetyRoot: tmpdir() })
+    await expect(
+      outbox.mint({ content: Buffer.from('x'), filename: '.', mime: 'text/plain' }),
+    ).rejects.toThrow(/filename/i)
+    await expect(
+      outbox.mint({ content: Buffer.from('x'), filename: '..', mime: 'text/plain' }),
+    ).rejects.toThrow(/filename/i)
+  })
+
   test('rejects mint when the payload exceeds the 50 MB cap', async () => {
     const outbox = createOutbox({ dir, ttlSeconds: 60, safetyRoot: tmpdir() })
     // 51 MB

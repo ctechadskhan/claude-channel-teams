@@ -258,7 +258,7 @@ describe('processAttachments — inline image with bearer token', () => {
   test('annotates failure when getBearerToken throws', async () => {
     const att: Attachment = {
       contentType: 'image/jpeg',
-      contentUrl: 'https://smba.example/img',
+      contentUrl: 'https://smba.trafficmanager.net/uk/v3/attachments/x/views/original',
     } as Attachment
     const fetchImpl = makeFetch({})
     const { annotations, results } = await processAttachments([att], 'Adnan Khan', {
@@ -270,6 +270,98 @@ describe('processAttachments — inline image with bearer token', () => {
     expect(results[0]!.kind).toBe('failed')
     expect(annotations[0]).toContain('bearer token unavailable')
     expect(annotations[0]).toContain('token endpoint down')
+  })
+})
+
+describe('processAttachments — bearer-token host gate', () => {
+  let baseDir: string
+  beforeEach(() => { baseDir = mkdtempSync(join(tmpdir(), 'cct-att-host-')) })
+  afterEach(() => { rmSync(baseDir, { recursive: true, force: true }) })
+
+  test('refuses to fetch an inline image with bearer when the host is not a Microsoft attachment host', async () => {
+    let bearerSent: string | undefined
+    let fetchedUrl: string | undefined
+    const fetchImpl = makeFetch({
+      'https://attacker.example.com/collect': ({ url, headers }) => {
+        fetchedUrl = url
+        bearerSent = headers['Authorization'] ?? headers['authorization']
+        return new Response('captured', { status: 200 })
+      },
+    })
+
+    const att: Attachment = {
+      contentType: 'image/png',
+      contentUrl: 'https://attacker.example.com/collect',
+    } as Attachment
+
+    let tokenWasRequested = false
+    const { annotations, results } = await processAttachments([att], 'Adnan Khan', {
+      baseDir,
+      fetchImpl,
+      getBearerToken: async () => {
+        tokenWasRequested = true
+        return 'SECRET-BOT-TOKEN'
+      },
+      now: () => FIXED_NOW,
+    })
+
+    expect(results[0]!.kind).toBe('failed')
+    // The attacker URL must NOT have been fetched and the token must NOT have leaked.
+    expect(fetchedUrl).toBeUndefined()
+    expect(bearerSent).toBeUndefined()
+    // We also avoid calling getBearerToken at all when the host is bad.
+    expect(tokenWasRequested).toBe(false)
+    expect(annotations[0]?.toLowerCase()).toMatch(/host|allow|disallow/)
+  })
+
+  test('refuses an http:// (non-TLS) image URL even on a Microsoft host', async () => {
+    const fetchImpl = makeFetch({})
+    const att: Attachment = {
+      contentType: 'image/png',
+      contentUrl: 'http://smba.trafficmanager.net/uk/v3/attachments/x',
+    } as Attachment
+    const { results } = await processAttachments([att], 'Adnan Khan', {
+      baseDir,
+      fetchImpl,
+      getBearerToken: async () => 'TOKEN',
+      now: () => FIXED_NOW,
+    })
+    expect(results[0]!.kind).toBe('failed')
+  })
+
+  test('refuses an image URL with a non-allowlisted trafficmanager.net subdomain', async () => {
+    const fetchImpl = makeFetch({})
+    const att: Attachment = {
+      contentType: 'image/png',
+      // Anyone can register an Azure Traffic Manager profile; only smba.* is the
+      // documented Bot Framework attachment service prefix.
+      contentUrl: 'https://attacker.trafficmanager.net/x',
+    } as Attachment
+    const { results } = await processAttachments([att], 'Adnan Khan', {
+      baseDir,
+      fetchImpl,
+      getBearerToken: async () => 'TOKEN',
+      now: () => FIXED_NOW,
+    })
+    expect(results[0]!.kind).toBe('failed')
+  })
+
+  test('allows smba.<region>.trafficmanager.net hosts', async () => {
+    const url = 'https://smba.uk.trafficmanager.net/v3/attachments/x/views/original'
+    const fetchImpl = makeFetch({
+      [url]: () => new Response(new Uint8Array([1, 2, 3]), { status: 200 }),
+    })
+    const att: Attachment = {
+      contentType: 'image/png',
+      contentUrl: url,
+    } as Attachment
+    const { results } = await processAttachments([att], 'Adnan Khan', {
+      baseDir,
+      fetchImpl,
+      getBearerToken: async () => 'TOKEN',
+      now: () => FIXED_NOW,
+    })
+    expect(results[0]!.kind).toBe('saved')
   })
 })
 

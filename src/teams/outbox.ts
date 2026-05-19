@@ -22,7 +22,7 @@
 
 import { randomBytes } from 'crypto'
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'fs'
-import { resolve, sep, join } from 'path'
+import { basename, resolve, sep, join } from 'path'
 
 /** Max payload size — matches the inbound attachment cap. */
 const MAX_BYTES = 50 * 1024 * 1024
@@ -145,15 +145,35 @@ export function createOutbox(deps: OutboxDeps): Outbox {
         `outbox: payload ${input.content.length} bytes exceeds 50 MB cap`,
       )
     }
+    // Strip any path components from the supplied filename — the `send_file`
+    // tool argument is treated as untrusted (prompt-injection threat model).
+    // Without this a filename like "../../../etc/shadow" would resolve via
+    // `path.join` to an arbitrary location and `writeFileSync` would clobber it.
+    const safeName = basename(input.filename)
+    if (!safeName || safeName === '.' || safeName === '..') {
+      throw new Error(
+        `outbox: invalid filename — sanitised value is empty or dotfile-only`,
+      )
+    }
     const token = randomBytes(32).toString('base64url')
     const tokenDir = join(deps.dir, token)
     mkdirSync(tokenDir, { recursive: true, mode: 0o700 })
-    const path = join(tokenDir, input.filename)
+    const path = join(tokenDir, safeName)
+    // Defence in depth: even with basename(), assert the resolved write target
+    // sits inside the token dir. Future refactors might pass partial paths
+    // through; the prefix check catches any regression.
+    const resolvedPath = resolve(path)
+    const tokenDirWithSep = resolve(tokenDir) + sep
+    if (!resolvedPath.startsWith(tokenDirWithSep)) {
+      throw new Error(
+        `outbox: write target ${resolvedPath} escapes token dir`,
+      )
+    }
     writeFileSync(path, input.content, { mode: 0o600 })
     const entry: OutboxEntry = {
       token,
       path,
-      filename: input.filename,
+      filename: safeName,
       mime: input.mime,
       sizeBytes: input.content.length,
       expiresAt: Date.now() + ttlMs,

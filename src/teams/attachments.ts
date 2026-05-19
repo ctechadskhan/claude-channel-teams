@@ -47,6 +47,44 @@ export const DOWNLOAD_TIMEOUT_MS = 30_000
 const TEAMS_FILE_DOWNLOAD_CONTENT_TYPE =
   'application/vnd.microsoft.teams.file.download.info'
 
+/**
+ * Host gate for inline-image content URLs.
+ *
+ * The inline-image branch attaches the bot's s2s bearer token to every fetch.
+ * Without a host check, an attacker-supplied `contentUrl` on an inbound
+ * activity would exfiltrate that token — the bot would happily POST it to
+ * `attacker.example.com`. So we restrict to the Microsoft-documented
+ * Bot Framework attachment service:
+ *
+ *   - `smba.trafficmanager.net` (legacy global)
+ *   - `smba.<region>.trafficmanager.net` (regional variants — uk, emea, in, au, fc, etc.)
+ *
+ * Protocol must be HTTPS. URL parsing rejects userinfo / IP literals
+ * implicitly through the hostname check.
+ *
+ * NOTE: `trafficmanager.net` as a whole is shared Azure infrastructure —
+ * any tenant can register a profile there. We pin on the `smba.` prefix
+ * because that's the Bot Framework attachment service's actual namespace.
+ */
+export function isAllowedInlineImageHost(url: string): boolean {
+  let u: URL
+  try {
+    u = new URL(url)
+  } catch {
+    return false
+  }
+  if (u.protocol !== 'https:') return false
+  if (u.username || u.password) return false
+  const host = u.hostname.toLowerCase()
+  if (host === 'smba.trafficmanager.net') return true
+  // smba.<region>.trafficmanager.net — require BOTH the smba. prefix
+  // and the trafficmanager.net suffix.
+  if (host.startsWith('smba.') && host.endsWith('.trafficmanager.net')) {
+    return true
+  }
+  return false
+}
+
 /** Result for one attachment — either saved, skipped, or failed. */
 export type AttachmentResult =
   | { kind: 'saved'; path: string; contentType: string; sizeBytes: number; originalName: string }
@@ -288,6 +326,16 @@ export async function processOne(
     const url = att.contentUrl
     if (!url || typeof url !== 'string') {
       return { kind: 'failed', reason: 'missing contentUrl', originalName: declaredName }
+    }
+    // Host allowlist — block the bot's s2s bearer token from being attached to
+    // any URL that isn't the documented Microsoft attachment service. Without
+    // this, an attacker-supplied contentUrl exfiltrates the bot credential.
+    if (!isAllowedInlineImageHost(url)) {
+      return {
+        kind: 'failed',
+        reason: 'disallowed inline-image host (must be smba.*.trafficmanager.net over https)',
+        originalName: declaredName,
+      }
     }
     let token: string
     try {
