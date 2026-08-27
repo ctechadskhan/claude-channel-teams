@@ -19,6 +19,7 @@ import type { Allowlist } from '../pairing/allowlist.js'
 import type { Config } from '../config.js'
 import type { ConversationRefStore } from './conversationRefs.js'
 import type { TypingPump } from './typingPump.js'
+import { markdownToAdaptiveCard } from './markdownCard.js'
 
 export class UnknownConversationError extends Error {
   constructor(conversationId: string) {
@@ -83,15 +84,36 @@ export function createReplySender(deps: ReplyDeps) {
     // `continueConversationAsync` rehydrates the conversation context using
     // the stored reference and our pinned credentials. The SDK takes care of
     // grabbing a fresh service-to-service token (cached by app id).
+    // Structured markdown (headings, lists, code, multiple paragraphs) is
+    // rendered as an Adaptive Card — text-only bot messages strip most of
+    // that and arrive as a wall of text. Simple prose stays a plain markdown
+    // text message (lighter, copy-paste friendly, bold/links render fine).
+    // Card building must never lose a message: any renderer surprise falls
+    // back to the text path.
+    let rendered: ReturnType<typeof markdownToAdaptiveCard> = null
+    try {
+      rendered = markdownToAdaptiveCard(text)
+    } catch (err) {
+      process.stderr.write(
+        `teams channel: markdown card render failed, falling back to text: ${err instanceof Error ? err.message : String(err)}\n`,
+      )
+    }
+    const activity = rendered
+      ? {
+          type: 'message' as const,
+          attachments: [rendered.attachment],
+          summary: rendered.summary,
+        }
+      : { type: 'message' as const, text, textFormat: 'markdown' as const }
     await deps.adapter.continueConversationAsync(
       deps.config.appId,
       ref,
       async turnContext => {
-        await turnContext.sendActivity({ type: 'message', text, textFormat: 'markdown' })
+        await turnContext.sendActivity(activity)
       },
     )
     process.stderr.write(
-      `teams channel: reply sent conv=${conversationId} len=${text.length}\n`,
+      `teams channel: reply sent conv=${conversationId} len=${text.length} mode=${rendered ? 'card' : 'text'}\n`,
     )
   }
 

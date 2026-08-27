@@ -216,7 +216,10 @@ async function sendActivityRaw(
     config.appId,
     ref,
     async turnContext => {
-      await turnContext.sendActivity({ type: 'message', text })
+      // Match the `reply` tool path (src/teams/reply.ts): render as Teams'
+      // markdown subset so **bold**, lists and \n\n paragraph breaks survive.
+      // Matters for the /cost intercept, which emits **bold** section heads.
+      await turnContext.sendActivity({ type: 'message', text, textFormat: 'markdown' })
     },
   )
 }
@@ -284,9 +287,11 @@ mcp.setRequestHandler(ListToolsRequestSchema, async () => ({
       name: 'reply',
       description:
         'Reply on Microsoft Teams. Pass conversation_id from the inbound message. ' +
-        'Text is rendered as markdown — Teams supports bold, italic, headers, ' +
-        'bullet/numbered lists, links, inline code, code blocks, and blockquotes. ' +
-        'Tables and HTML are not reliably supported across Teams clients.',
+        'Write normal markdown: structured text (headings, bullet/numbered lists, ' +
+        'code blocks, blockquotes, multiple paragraphs) is rendered as a rich ' +
+        'Adaptive Card, so full formatting arrives natively. Simple one-paragraph ' +
+        'prose is sent as a plain text message (bold, italic and links still render). ' +
+        'Markdown tables are shown monospace — prefer short labelled lines instead.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -294,7 +299,7 @@ mcp.setRequestHandler(ListToolsRequestSchema, async () => ({
             type: 'string',
             description: 'The conversation_id from the inbound <channel> tag. Pass through unchanged.',
           },
-          text: { type: 'string', description: 'Message text. Teams renders this as markdown (bold, italic, headers, lists, links, inline code, code blocks, blockquotes).' },
+          text: { type: 'string', description: 'Message text in markdown. Structured content (headings, lists, code blocks, quotes, multi-paragraph) renders as a rich Adaptive Card; simple prose goes as plain text.' },
         },
         required: ['conversation_id', 'text'],
       },

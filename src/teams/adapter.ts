@@ -28,6 +28,7 @@
  * Documented in docs/dependencies.md.
  */
 
+import { execSync } from 'node:child_process'
 import {
   CloudAdapter,
   TurnContext,
@@ -366,6 +367,37 @@ export function makeTurnHandler(deps: AdapterDeps): (ctx: TurnContext) => Promis
         // Fall through — unknown id may be a coincidence (operator typing
         // about a different request). Forward as chat.
       }
+    }
+
+    // ── /cost intercept ──────────────────────────────────────────────────
+    // A standing operator command, handled WITHOUT the agent in the loop.
+    // The sender is already allowlisted (we're below the gate) and this fires
+    // only on an exact "/cost" — no chatty prefix/suffix is swallowed. We run
+    // the local cost-tracker parser and post its output straight back through
+    // the same proactive Bot Framework send path the pairing DM uses
+    // (sendPairingDm → continueConversationAsync). Then we return so the
+    // message is never forwarded to Claude.
+    if (rawText.trim().toLowerCase() === '/cost' && deps.sendPairingDm) {
+      const ref = TurnContext.getConversationReference(a)
+      let reply: string
+      try {
+        const out = execSync(
+          'python3 /home/ccuser/services/cost-tracker/cost_summary.py --period today,7d --format text',
+          { timeout: 20000, encoding: 'utf8' },
+        )
+        // The parser emits Telegram-style *single asterisk* emphasis. Teams
+        // renders **double** as bold, so promote leading/section *...* spans
+        // to **...** for nicer rendering. Trivial line-level conversion; any
+        // span we don't match is sent as-is.
+        reply = out.replace(/(^|\n)\*([^*\n]+)\*/g, '$1**$2**')
+      } catch (err) {
+        reply = `/cost failed: ${err instanceof Error ? err.message : String(err)}`
+      }
+      deps.sendPairingDm(ref, reply).catch(sendErr => {
+        process.stderr.write(`teams channel: /cost reply send failed: ${sendErr}\n`)
+      })
+      process.stderr.write(`teams channel: /cost handled for ${aadObjectId}\n`)
+      return
     }
 
     deps.onEvent({
