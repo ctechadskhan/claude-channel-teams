@@ -291,8 +291,8 @@ mcp.setRequestHandler(ListToolsRequestSchema, async () => ({
         'code blocks, blockquotes, multiple paragraphs) renders as a rich Adaptive ' +
         'Card. Simple one-paragraph prose goes as a plain text message (bold, ' +
         'italic and links still render). Cards cannot be forwarded in Teams — for ' +
-        "a forwardable copy pass format: 'plain' and use U+2800 spacer lines " +
-        'between sections (plain messages strip genuinely blank lines).',
+        "a forwardable copy pass format: 'plain' — double newline between every " +
+        'line, U+2800 spacer paragraphs for gaps (single newlines soft-wrap and join).',
       inputSchema: {
         type: 'object',
         properties: {
@@ -301,7 +301,7 @@ mcp.setRequestHandler(ListToolsRequestSchema, async () => ({
             description: 'The conversation_id from the inbound <channel> tag. Pass through unchanged.',
           },
           text: { type: 'string', description: 'Message text in markdown. Structured content (headings, lists, code blocks, quotes, tables, multi-paragraph) renders as a rich Adaptive Card; simple prose goes as plain text.' },
-          format: { type: 'string', enum: ['auto', 'plain'], description: "Optional. 'plain' forces an ordinary forwardable text message regardless of structure — use for forwardable copies. In plain messages Teams strips blank lines; separate sections with lines containing only the braille-blank character U+2800 (⠀) to keep vertical spacing. Default 'auto'." },
+          format: { type: 'string', enum: ['auto', 'plain'], description: "Optional. 'plain' forces an ordinary forwardable text message regardless of structure — use for forwardable copies. Plain rendering treats single newlines as soft wraps (lines JOIN): put a double newline between every line, make gaps with a paragraph containing only U+2800 (⠀), use **BOLD CAPS** for section heads, • bullets one per paragraph, and --- for a divider. Default 'auto'." },
         },
         required: ['conversation_id', 'text'],
       },
