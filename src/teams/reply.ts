@@ -95,14 +95,34 @@ export function createReplySender(deps: ReplyDeps) {
     //
     // TEAMS_REPLY_RICH_MODE=card restores the card path; =off disables rich
     // handling entirely (everything plain markdown).
+    //
+    // The operator's context-bar hook appends "\n\n-----\nCONTEXT …" to every
+    // reply. That suffix must not influence the mode decision — it made every
+    // one-line reply count as structured (27 Aug incident). Detect it, decide
+    // on the body alone, and on the card path append the bar as a subtle
+    // footer block rather than letting it render as content.
     const richMode = process.env.TEAMS_REPLY_RICH_MODE ?? 'xmd'
+    const barMatch = text.match(/\n\n-{3,}\nCONTEXT \d+% USED\n[\s\S]*$/)
+    const body = barMatch ? text.slice(0, barMatch.index) : text
+    const barText = barMatch ? barMatch[0].replace(/^\n\n-{3,}\n/, '') : null
     let mode = 'text'
     let activity: Partial<import('botbuilder').Activity>
-    if (richMode !== 'off' && needsCard(text)) {
+    if (richMode !== 'off' && needsCard(body)) {
       if (richMode === 'card') {
         let rendered: ReturnType<typeof markdownToAdaptiveCard> = null
         try {
-          rendered = markdownToAdaptiveCard(text)
+          rendered = markdownToAdaptiveCard(body)
+          if (rendered && barText) {
+            rendered.attachment.content.body.push({
+              type: 'TextBlock',
+              text: barText,
+              wrap: true,
+              isSubtle: true,
+              size: 'Small',
+              separator: true,
+              spacing: 'Medium',
+            })
+          }
         } catch (err) {
           process.stderr.write(
             `teams channel: markdown card render failed, falling back to text: ${err instanceof Error ? err.message : String(err)}\n`,

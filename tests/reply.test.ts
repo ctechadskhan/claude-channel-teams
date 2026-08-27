@@ -197,3 +197,59 @@ describe('reply tool', () => {
     rmSync(dir, { recursive: true })
   })
 })
+
+describe('reply mode selection with the context-bar suffix', () => {
+  const BAR = '\n\n-----\nCONTEXT 40% USED\n🟩🟩🟩🟩⬜⬜⬜⬜⬜⬜\n400k of 1M - 60% remaining'
+
+  function harness() {
+    const dir = mkdtempSync(join(tmpdir(), 'cct-reply-bar-'))
+    const allowlist = createAllowlist(join(dir, 'allowlist.json'))
+    allowlist.addEntry(FIXTURE_ID)
+    const refs = createConversationRefStore()
+    refs.put('conv-abc', { conversation: { id: 'conv-abc' } } as any, FIXTURE_ID)
+    const captured: { act?: any } = {}
+    const adapter = {
+      async continueConversationAsync(_appId: string, _ref: any, logic: any) {
+        await logic({ async sendActivity(act: any) { captured.act = act } })
+      },
+    } as any
+    const { sendReply } = createReplySender({ config: makeConfig() as any, adapter, allowlist, refs })
+    return { sendReply, captured, dir }
+  }
+
+  test('simple prose plus bar stays a plain markdown text message', async () => {
+    process.env.TEAMS_REPLY_RICH_MODE = 'card'
+    const { sendReply, captured, dir } = harness()
+    await sendReply('conv-abc', 'Just a one-line answer.' + BAR)
+    expect(captured.act.textFormat).toBe('markdown')
+    expect(captured.act.attachments).toBeUndefined()
+    expect(captured.act.text).toContain('CONTEXT 40% USED')
+    delete process.env.TEAMS_REPLY_RICH_MODE
+    rmSync(dir, { recursive: true })
+  })
+
+  test('structured body plus bar becomes a card with the bar as subtle footer', async () => {
+    process.env.TEAMS_REPLY_RICH_MODE = 'card'
+    const { sendReply, captured, dir } = harness()
+    await sendReply('conv-abc', '# Title\n\n- one\n- two' + BAR)
+    expect(captured.act.attachments).toHaveLength(1)
+    const cardBody = captured.act.attachments[0].content.body
+    const footer = cardBody[cardBody.length - 1]
+    expect(footer.isSubtle).toBe(true)
+    expect(footer.text).toContain('CONTEXT 40% USED')
+    expect(footer.text).not.toContain('-----')
+    delete process.env.TEAMS_REPLY_RICH_MODE
+    rmSync(dir, { recursive: true })
+  })
+
+  test('structured body without bar still becomes a card with no footer', async () => {
+    process.env.TEAMS_REPLY_RICH_MODE = 'card'
+    const { sendReply, captured, dir } = harness()
+    await sendReply('conv-abc', '# Title\n\n- one\n- two')
+    expect(captured.act.attachments).toHaveLength(1)
+    const cardBody = captured.act.attachments[0].content.body
+    expect(JSON.stringify(cardBody)).not.toContain('CONTEXT')
+    delete process.env.TEAMS_REPLY_RICH_MODE
+    rmSync(dir, { recursive: true })
+  })
+})
