@@ -253,3 +253,26 @@ describe('reply mode selection with the context-bar suffix', () => {
     rmSync(dir, { recursive: true })
   })
 })
+
+describe('format: plain override', () => {
+  test('structured text with format plain stays an ordinary markdown message', async () => {
+    process.env.TEAMS_REPLY_RICH_MODE = 'card'
+    const dir = mkdtempSync(join(tmpdir(), 'cct-reply-plain-'))
+    const allowlist = createAllowlist(join(dir, 'allowlist.json'))
+    allowlist.addEntry(FIXTURE_ID)
+    const refs = createConversationRefStore()
+    refs.put('conv-abc', { conversation: { id: 'conv-abc' } } as any, FIXTURE_ID)
+    const captured: { act?: any } = {}
+    const adapter = {
+      async continueConversationAsync(_appId: string, _ref: any, logic: any) {
+        await logic({ async sendActivity(act: any) { captured.act = act } })
+      },
+    } as any
+    const { sendReply } = createReplySender({ config: makeConfig() as any, adapter, allowlist, refs })
+    await sendReply('conv-abc', 'HEADER\n⠀\n- bullet one\n- bullet two', 'plain')
+    expect(captured.act.textFormat).toBe('markdown')
+    expect(captured.act.attachments).toBeUndefined()
+    delete process.env.TEAMS_REPLY_RICH_MODE
+    rmSync(dir, { recursive: true })
+  })
+})

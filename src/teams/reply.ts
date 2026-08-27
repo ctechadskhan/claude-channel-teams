@@ -75,7 +75,7 @@ export function createReplySender(deps: ReplyDeps) {
     return { ref: stored.ref }
   }
 
-  async function sendReply(conversationId: string, text: string): Promise<void> {
+  async function sendReply(conversationId: string, text: string, format?: string): Promise<void> {
     const { ref } = assertAllowedConversation(conversationId)
     // Stop the typing pump first. We do this before the network send so the
     // indicator clears even if the connector call throws — flapping
@@ -101,13 +101,18 @@ export function createReplySender(deps: ReplyDeps) {
     // one-line reply count as structured (27 Aug incident). Detect it, decide
     // on the body alone, and on the card path append the bar as a subtle
     // footer block rather than letting it render as content.
+    // format: 'plain' forces an ordinary markdown text message regardless of
+    // structure — the deliberate "forwardable copy" path. Structured content
+    // there can carry U+2800-padded spacer lines for vertical rhythm, which
+    // would otherwise flip the auto-detection into card mode.
+    const forcePlain = format === 'plain'
     const richMode = process.env.TEAMS_REPLY_RICH_MODE ?? 'xmd'
     const barMatch = text.match(/\n\n-{3,}\nCONTEXT \d+% USED\n[\s\S]*$/)
     const body = barMatch ? text.slice(0, barMatch.index) : text
     const barText = barMatch ? barMatch[0].replace(/^\n\n-{3,}\n/, '') : null
-    let mode = 'text'
+    let mode = forcePlain ? 'plain-forced' : 'text'
     let activity: Partial<import('botbuilder').Activity>
-    if (richMode !== 'off' && needsCard(body)) {
+    if (!forcePlain && richMode !== 'off' && needsCard(body)) {
       if (richMode === 'card') {
         let rendered: ReturnType<typeof markdownToAdaptiveCard> = null
         try {

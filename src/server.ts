@@ -288,10 +288,11 @@ mcp.setRequestHandler(ListToolsRequestSchema, async () => ({
       description:
         'Reply on Microsoft Teams. Pass conversation_id from the inbound message. ' +
         'Write normal markdown: structured text (headings, bullet/numbered lists, ' +
-        'code blocks, blockquotes, tables, multiple paragraphs) is sent as an ' +
-        'extended-markdown text message — rich formatting that the recipient can ' +
-        'still forward like any ordinary Teams message. Simple one-paragraph prose ' +
-        'goes as plain text (bold, italic and links still render).',
+        'code blocks, blockquotes, multiple paragraphs) renders as a rich Adaptive ' +
+        'Card. Simple one-paragraph prose goes as a plain text message (bold, ' +
+        'italic and links still render). Cards cannot be forwarded in Teams — for ' +
+        "a forwardable copy pass format: 'plain' and use U+2800 spacer lines " +
+        'between sections (plain messages strip genuinely blank lines).',
       inputSchema: {
         type: 'object',
         properties: {
@@ -299,7 +300,8 @@ mcp.setRequestHandler(ListToolsRequestSchema, async () => ({
             type: 'string',
             description: 'The conversation_id from the inbound <channel> tag. Pass through unchanged.',
           },
-          text: { type: 'string', description: 'Message text in markdown. Structured content (headings, lists, code blocks, quotes, tables, multi-paragraph) renders as rich extended markdown in a forwardable text message; simple prose goes as plain text.' },
+          text: { type: 'string', description: 'Message text in markdown. Structured content (headings, lists, code blocks, quotes, tables, multi-paragraph) renders as a rich Adaptive Card; simple prose goes as plain text.' },
+          format: { type: 'string', enum: ['auto', 'plain'], description: "Optional. 'plain' forces an ordinary forwardable text message regardless of structure — use for forwardable copies. In plain messages Teams strips blank lines; separate sections with lines containing only the braille-blank character U+2800 (⠀) to keep vertical spacing. Default 'auto'." },
         },
         required: ['conversation_id', 'text'],
       },
@@ -413,7 +415,8 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
         if (typeof text !== 'string' || text.length === 0) {
           throw new Error('reply requires a non-empty text string')
         }
-        await replier.sendReply(conversationId, text)
+        const format = typeof args.format === 'string' ? args.format : undefined
+        await replier.sendReply(conversationId, text, format)
         return { content: [{ type: 'text', text: `sent (conv=${conversationId})` }] }
       }
 
