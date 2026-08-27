@@ -19,7 +19,7 @@ import type { Allowlist } from '../pairing/allowlist.js'
 import type { Config } from '../config.js'
 import type { ConversationRefStore } from './conversationRefs.js'
 import type { TypingPump } from './typingPump.js'
-import { markdownToAdaptiveCard } from './markdownCard.js'
+import { markdownToAdaptiveCard, needsCard } from './markdownCard.js'
 
 export class UnknownConversationError extends Error {
   constructor(conversationId: string) {
@@ -85,26 +85,41 @@ export function createReplySender(deps: ReplyDeps) {
     // the stored reference and our pinned credentials. The SDK takes care of
     // grabbing a fresh service-to-service token (cached by app id).
     // Structured markdown (headings, lists, code, multiple paragraphs) is
-    // rendered as an Adaptive Card — text-only bot messages strip most of
-    // that and arrive as a wall of text. Simple prose stays a plain markdown
-    // text message (lighter, copy-paste friendly, bold/links render fine).
-    // Card building must never lose a message: any renderer surprise falls
-    // back to the text path.
-    let rendered: ReturnType<typeof markdownToAdaptiveCard> = null
-    try {
-      rendered = markdownToAdaptiveCard(text)
-    } catch (err) {
-      process.stderr.write(
-        `teams channel: markdown card render failed, falling back to text: ${err instanceof Error ? err.message : String(err)}\n`,
-      )
-    }
-    const activity = rendered
-      ? {
-          type: 'message' as const,
-          attachments: [rendered.attachment],
-          summary: rendered.summary,
+    // sent with textFormat "extendedmarkdown" — Teams' CommonMark rendering
+    // for ordinary text messages. Unlike the Adaptive Card path this used
+    // briefly (27 Aug 2026), the result is a NORMAL message, so the operator
+    // can forward it — cards cannot be forwarded in Teams, which is why the
+    // card path was retired the same night it shipped. Simple prose stays
+    // plain "markdown" (proven, universally rendered). The card renderer is
+    // kept in markdownCard.ts should a card surface ever be wanted again.
+    //
+    // TEAMS_REPLY_RICH_MODE=card restores the card path; =off disables rich
+    // handling entirely (everything plain markdown).
+    const richMode = process.env.TEAMS_REPLY_RICH_MODE ?? 'xmd'
+    let mode = 'text'
+    let activity: Partial<import('botbuilder').Activity>
+    if (richMode !== 'off' && needsCard(text)) {
+      if (richMode === 'card') {
+        let rendered: ReturnType<typeof markdownToAdaptiveCard> = null
+        try {
+          rendered = markdownToAdaptiveCard(text)
+        } catch (err) {
+          process.stderr.write(
+            `teams channel: markdown card render failed, falling back to text: ${err instanceof Error ? err.message : String(err)}\n`,
+          )
         }
-      : { type: 'message' as const, text, textFormat: 'markdown' as const }
+        mode = rendered ? 'card' : 'text'
+        activity = rendered
+          ? { type: 'message', attachments: [rendered.attachment as any], summary: rendered.summary }
+          : { type: 'message', text, textFormat: 'markdown' }
+      } else {
+        // 'extendedmarkdown' postdates botbuilder's TextFormatTypes union.
+        mode = 'xmd'
+        activity = { type: 'message', text, textFormat: 'extendedmarkdown' as any }
+      }
+    } else {
+      activity = { type: 'message', text, textFormat: 'markdown' }
+    }
     await deps.adapter.continueConversationAsync(
       deps.config.appId,
       ref,
@@ -113,7 +128,7 @@ export function createReplySender(deps: ReplyDeps) {
       },
     )
     process.stderr.write(
-      `teams channel: reply sent conv=${conversationId} len=${text.length} mode=${rendered ? 'card' : 'text'}\n`,
+      `teams channel: reply sent conv=${conversationId} len=${text.length} mode=${mode}\n`,
     )
   }
 

@@ -288,10 +288,10 @@ mcp.setRequestHandler(ListToolsRequestSchema, async () => ({
       description:
         'Reply on Microsoft Teams. Pass conversation_id from the inbound message. ' +
         'Write normal markdown: structured text (headings, bullet/numbered lists, ' +
-        'code blocks, blockquotes, multiple paragraphs) is rendered as a rich ' +
-        'Adaptive Card, so full formatting arrives natively. Simple one-paragraph ' +
-        'prose is sent as a plain text message (bold, italic and links still render). ' +
-        'Markdown tables are shown monospace — prefer short labelled lines instead.',
+        'code blocks, blockquotes, tables, multiple paragraphs) is sent as an ' +
+        'extended-markdown text message — rich formatting that the recipient can ' +
+        'still forward like any ordinary Teams message. Simple one-paragraph prose ' +
+        'goes as plain text (bold, italic and links still render).',
       inputSchema: {
         type: 'object',
         properties: {
@@ -299,7 +299,7 @@ mcp.setRequestHandler(ListToolsRequestSchema, async () => ({
             type: 'string',
             description: 'The conversation_id from the inbound <channel> tag. Pass through unchanged.',
           },
-          text: { type: 'string', description: 'Message text in markdown. Structured content (headings, lists, code blocks, quotes, multi-paragraph) renders as a rich Adaptive Card; simple prose goes as plain text.' },
+          text: { type: 'string', description: 'Message text in markdown. Structured content (headings, lists, code blocks, quotes, tables, multi-paragraph) renders as rich extended markdown in a forwardable text message; simple prose goes as plain text.' },
         },
         required: ['conversation_id', 'text'],
       },
